@@ -54,12 +54,31 @@ Keep each reply short (1 to 3 sentences) so it is easy to listen to, stay in the
 Only list real grammar or vocabulary mistakes in "corrections"; explanations are in French and one sentence long.`;
 }
 
+// Un modèle qui a renvoyé « quota atteint » est mis de côté un moment, pour ne
+// pas perdre une requête à chaque message.
+const blockedUntil = new Map();
+// Certains modèles refusent le réglage de réflexion minimale : on s'en souvient.
+const noThinkingConfig = new Set();
+
+/** Extrait le champ "reply" dès qu'il est complet dans le JSON en cours d'arrivée. */
+export function extractReply(partialJson) {
+  const m = partialJson.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (!m) return null;
+  try {
+    return JSON.parse(`"${m[1]}"`);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The app runs on the learner's own phone with their own free Gemini API key,
  * so it calls the Gemini API directly (no server in between).
- * @param {{apiKey: string, lessonId: string, level: string, history: {role: "user"|"assistant", content: string}[]}} params
+ * The answer is streamed: `onReply` is called with Sam's sentence as soon as it
+ * has arrived, before the corrections and translation are finished.
+ * @param {{apiKey: string, lessonId: string, level: string, history: {role: "user"|"assistant", content: string}[], onReply?: (reply: string) => void}} params
  */
-export async function tutorTurn({ apiKey, lessonId, level, history }) {
+export async function tutorTurn({ apiKey, lessonId, level, history, onReply }) {
   const ai = new GoogleGenAI({ apiKey });
   const lesson = getLesson(lessonId);
   // The conversation always starts with this hidden learner turn, so Sam's
@@ -73,26 +92,49 @@ export async function tutorTurn({ apiKey, lessonId, level, history }) {
     parts: [{ text: m.content }],
   }));
 
+  const now = Date.now();
+  const available = MODELS.filter((m) => (blockedUntil.get(m) ?? 0) < now);
+  const candidates = available.length ? available : MODELS;
+
   let lastError;
-  for (const model of MODELS) {
+  for (const model of candidates) {
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction: systemPrompt(lesson, level),
-          responseMimeType: "application/json",
-          responseJsonSchema: REPLY_SCHEMA,
-          maxOutputTokens: 2000,
-        },
-      });
-      const text = response.text;
+      const config = {
+        systemInstruction: systemPrompt(lesson, level),
+        responseMimeType: "application/json",
+        responseJsonSchema: REPLY_SCHEMA,
+        maxOutputTokens: 1000,
+      };
+      // Pas de « réflexion » avant de répondre : c'est une conversation, la vitesse compte.
+      if (!noThinkingConfig.has(model)) config.thinkingConfig = { thinkingLevel: "minimal" };
+
+      const stream = await ai.models.generateContentStream({ model, contents, config });
+      let text = "";
+      let replySent = false;
+      for await (const chunk of stream) {
+        text += chunk.text ?? "";
+        if (!replySent && onReply) {
+          const reply = extractReply(text);
+          if (reply) {
+            replySent = true;
+            onReply(reply);
+          }
+        }
+      }
       if (!text) throw new Error("Le tuteur n'a pas pu répondre à ce message.");
       return JSON.parse(text);
     } catch (err) {
       lastError = err;
+      if (err?.status === 400 && /thinking/i.test(err.message) && !noThinkingConfig.has(model)) {
+        noThinkingConfig.add(model);
+        candidates.splice(candidates.indexOf(model) + 1, 0, model); // réessaie sans ce réglage
+        continue;
+      }
       // Quota gratuit atteint (429) ou modèle indisponible (404) : on essaie le suivant.
-      if (err?.status === 429 || err?.status === 404) continue;
+      if (err?.status === 429 || err?.status === 404) {
+        blockedUntil.set(model, Date.now() + (err.status === 429 ? 60_000 : 3_600_000));
+        continue;
+      }
       throw err;
     }
   }

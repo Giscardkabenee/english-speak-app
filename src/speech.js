@@ -21,7 +21,7 @@ if (!isNative && "speechSynthesis" in window) {
   speechSynthesis.onvoiceschanged = pick;
 }
 
-export async function speak(text, rate = 0.95) {
+export async function speak(text, rate = 1.0) {
   if (isNative) {
     try {
       await TextToSpeech.stop();

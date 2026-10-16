@@ -136,22 +136,30 @@ function button(label, onclick) {
   return b;
 }
 
-function addTutorBubble(data) {
+// Affiche la phrase de Sam tout de suite ; la traduction arrive juste après.
+function addTutorBubble(reply) {
   const div = addBubble("tutor", "");
   const p = document.createElement("p");
-  p.textContent = data.reply;
+  p.textContent = reply;
   const fr = document.createElement("p");
   fr.className = "translation";
-  fr.textContent = data.reply_fr;
   fr.hidden = true;
+  const translate = button("🇫🇷 Traduire", () => (fr.hidden = !fr.hidden));
+  translate.disabled = true;
   const actions = document.createElement("div");
   actions.className = "bubble-actions";
   actions.append(
-    button("🔊 Réécouter", () => speak(data.reply)),
-    button("🐢 Lentement", () => speak(data.reply, 0.7)),
-    button("🇫🇷 Traduire", () => (fr.hidden = !fr.hidden))
+    button("🔊 Réécouter", () => speak(reply)),
+    button("🐢 Lentement", () => speak(reply, 0.7)),
+    translate
   );
   div.append(p, actions, fr);
+  return {
+    setTranslation(text) {
+      fr.textContent = text;
+      translate.disabled = !text;
+    },
+  };
 }
 
 function addFeedback(data) {
@@ -194,18 +202,24 @@ function explainError(err) {
 async function tutorReply() {
   state.busy = true;
   const thinking = addBubble("tutor typing", "…");
+  let bubble = null;
+  const showReply = (reply) => {
+    thinking.remove();
+    bubble = addTutorBubble(reply);
+    speak(reply); // Sam parle pendant que les corrections finissent d'arriver
+  };
   try {
     const data = await tutorTurn({
       apiKey: getApiKey(),
       lessonId: state.lesson.id,
       level: $("#level").value,
       history: state.history,
+      onReply: showReply,
     });
-    thinking.remove();
+    if (!bubble) showReply(data.reply);
+    bubble.setTranslation(data.reply_fr);
     state.history.push({ role: "assistant", content: data.reply });
     if (state.history.length > 1) addFeedback(data);
-    addTutorBubble(data);
-    await speak(data.reply);
   } catch (err) {
     console.error(err);
     thinking.remove();
