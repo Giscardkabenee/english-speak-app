@@ -1,19 +1,26 @@
 {
   "name": "english-speak-app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Apprendre l'anglais en parlant avec un tuteur IA (inspiré de Speak).",
   "type": "module",
-  "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "test": "node --test"
+    "build": "node build.mjs",
+    "dev": "node build.mjs --serve",
+    "test": "node --test",
+    "android": "npm run build && npx cap sync android"
   },
   "engines": {
-    "node": ">=20.12"
+    "node": ">=22"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
-    "express": "^4.21.2"
+    "@capacitor-community/speech-recognition": "^7.0.1",
+    "@capacitor-community/text-to-speech": "^8.0.2",
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3",
+    "esbuild": "^0.28.2"
   }
 }

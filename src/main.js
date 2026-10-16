@@ -1,71 +1,62 @@
 import { scorePronunciation } from "./scoring.js";
+import { LESSONS } from "./lessons.js";
+import { tutorTurn } from "./tutor.js";
+import { speak, stopSpeaking, listen, stopListening, speechSupported } from "./speech.js";
 
 const $ = (sel) => document.querySelector(sel);
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 const state = {
-  lessons: [],
   lesson: null,
-  history: [], // {role, content} envoyé au serveur
+  history: [], // {role, content} envoyé à Claude
   busy: false,
+  listening: false,
 };
 
-// ---------- Synthèse vocale (la voix de Sam) ----------
-let englishVoice = null;
-function pickVoice() {
-  const voices = speechSynthesis.getVoices();
-  englishVoice =
-    voices.find((v) => v.lang === "en-US" && /Google|Samantha|Natural/i.test(v.name)) ||
-    voices.find((v) => v.lang.startsWith("en")) ||
-    null;
+// ---------- Stockage local (sur le téléphone) ----------
+function load(key, fallback = null) {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
-if ("speechSynthesis" in window) {
-  pickVoice();
-  speechSynthesis.onvoiceschanged = pickVoice;
-}
-
-function speak(text, rate = 0.95) {
-  if (!("speechSynthesis" in window)) return Promise.resolve();
-  speechSynthesis.cancel();
-  return new Promise((resolve) => {
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "en-US";
-    u.rate = rate;
-    if (englishVoice) u.voice = englishVoice;
-    u.onend = u.onerror = resolve;
-    speechSynthesis.speak(u);
-  });
+function save(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
 }
 
-// ---------- Reconnaissance vocale ----------
-function listen({ onInterim } = {}) {
-  return new Promise((resolve, reject) => {
-    if (!SpeechRecognition) return reject(new Error("unsupported"));
-    const rec = new SpeechRecognition();
-    rec.lang = "en-US";
-    rec.interimResults = true;
-    rec.maxAlternatives = 1;
-    let finalText = "";
-    rec.onresult = (e) => {
-      let interim = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) finalText += r[0].transcript;
-        else interim += r[0].transcript;
-      }
-      onInterim?.(finalText + interim);
-    };
-    rec.onerror = (e) => reject(new Error(e.error));
-    rec.onend = () => resolve(finalText.trim());
-    rec.start();
-    listen.current = rec;
-  });
+// ---------- Réglages : clé API ----------
+const getApiKey = () => load("apiKey", "");
+
+function openSettings() {
+  $("#api-key").value = getApiKey();
+  $("#settings-status").textContent = "";
+  $("#settings").showModal();
 }
 
-// ---------- Progression (stockée localement) ----------
+$("#settings-form").onsubmit = (e) => {
+  e.preventDefault();
+  const key = $("#api-key").value.trim();
+  if (key && !key.startsWith("sk-ant-")) {
+    $("#settings-status").textContent = "Une clé Anthropic commence par « sk-ant- ».";
+    return;
+  }
+  save("apiKey", key);
+  $("#settings").close();
+  renderKeyBanner();
+};
+$("#settings-cancel").onclick = () => $("#settings").close();
+$("#open-settings").onclick = openSettings;
+
+function renderKeyBanner() {
+  $("#key-banner").hidden = Boolean(getApiKey());
+}
+
+// ---------- Progression ----------
 function loadProgress() {
   try {
-    return JSON.parse(localStorage.getItem("progress")) || { days: [], turns: 0 };
+    return JSON.parse(load("progress")) || { days: [], turns: 0 };
   } catch {
     return { days: [], turns: 0 };
   }
@@ -75,9 +66,7 @@ function recordPractice() {
   const today = new Date().toISOString().slice(0, 10);
   if (!p.days.includes(today)) p.days.push(today);
   p.turns += 1;
-  try {
-    localStorage.setItem("progress", JSON.stringify(p));
-  } catch {}
+  save("progress", JSON.stringify(p));
   renderStreak();
 }
 function renderStreak() {
@@ -85,8 +74,7 @@ function renderStreak() {
   let streak = 0;
   const d = new Date();
   for (;;) {
-    const key = d.toISOString().slice(0, 10);
-    if (!p.days.includes(key)) break;
+    if (!p.days.includes(d.toISOString().slice(0, 10))) break;
     streak++;
     d.setDate(d.getDate() - 1);
   }
@@ -101,12 +89,10 @@ function show(id) {
   document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("active", s.id === id));
 }
 
-async function loadLessons() {
-  const res = await fetch("/api/lessons");
-  state.lessons = await res.json();
+function renderLessons() {
   const ul = $("#lessons");
   ul.innerHTML = "";
-  for (const lesson of state.lessons) {
+  for (const lesson of LESSONS) {
     const li = document.createElement("li");
     li.innerHTML = `<button class="lesson-card">
         <span class="emoji">${lesson.emoji}</span>
@@ -128,7 +114,8 @@ function openLesson(lesson) {
   renderPhrases(lesson.phrases);
   selectTab("talk");
   show("lesson");
-  tutorTurn();
+  if (getApiKey()) tutorReply();
+  else addBubble("error", "Ajoute ta clé API dans ⚙️ Réglages pour parler avec Sam. L'onglet Prononciation marche sans clé.");
 }
 
 function selectTab(name) {
@@ -146,34 +133,33 @@ function addBubble(role, text) {
   return div;
 }
 
+function button(label, onclick) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.onclick = onclick;
+  return b;
+}
+
 function addTutorBubble(data) {
   const div = addBubble("tutor", "");
   const p = document.createElement("p");
   p.textContent = data.reply;
-  div.appendChild(p);
-
-  const actions = document.createElement("div");
-  actions.className = "bubble-actions";
-  const replay = document.createElement("button");
-  replay.textContent = "🔊 Réécouter";
-  replay.onclick = () => speak(data.reply);
-  const slow = document.createElement("button");
-  slow.textContent = "🐢 Lentement";
-  slow.onclick = () => speak(data.reply, 0.7);
-  const tr = document.createElement("button");
-  tr.textContent = "🇫🇷 Traduire";
   const fr = document.createElement("p");
   fr.className = "translation";
   fr.textContent = data.reply_fr;
   fr.hidden = true;
-  tr.onclick = () => (fr.hidden = !fr.hidden);
-  actions.append(replay, slow, tr);
-  div.append(actions, fr);
+  const actions = document.createElement("div");
+  actions.className = "bubble-actions";
+  actions.append(
+    button("🔊 Réécouter", () => speak(data.reply)),
+    button("🐢 Lentement", () => speak(data.reply, 0.7)),
+    button("🇫🇷 Traduire", () => (fr.hidden = !fr.hidden))
+  );
+  div.append(p, actions, fr);
 }
 
 function addFeedback(data) {
-  const hasCorrections = data.corrections?.length > 0;
-  if (!hasCorrections && !data.better_way) return;
+  if (!data.corrections?.length && !data.better_way) return;
   const div = document.createElement("div");
   div.className = "feedback";
   const title = document.createElement("strong");
@@ -192,40 +178,42 @@ function addFeedback(data) {
     const better = document.createElement("div");
     better.className = "better";
     better.textContent = `💡 Plus naturel : “${data.better_way}”`;
-    const play = document.createElement("button");
-    play.textContent = "🔊";
-    play.onclick = () => speak(data.better_way);
-    better.appendChild(play);
+    better.appendChild(button("🔊", () => speak(data.better_way)));
     div.appendChild(better);
   }
-  // Le retour s'affiche sous le dernier message de l'apprenant.
   const bubbles = $("#chat").querySelectorAll(".bubble.user");
   bubbles[bubbles.length - 1]?.after(div);
 }
 
-async function tutorTurn() {
+function explainError(err) {
+  if (err?.status === 401) return "ta clé API n'est pas valide. Vérifie-la dans ⚙️ Réglages.";
+  if (err?.status === 429) return "trop de demandes d'un coup, attends quelques secondes et réessaie.";
+  if (err?.status === 400 && /credit/i.test(err.message)) return "ton compte Anthropic n'a plus de crédit.";
+  if (!navigator.onLine || err?.name === "APIConnectionError") return "pas de connexion Internet.";
+  return err?.message || "erreur inconnue.";
+}
+
+async function tutorReply() {
   state.busy = true;
   const thinking = addBubble("tutor typing", "…");
   try {
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        lessonId: state.lesson.id,
-        level: $("#level").value,
-        history: state.history,
-      }),
+    const data = await tutorTurn({
+      apiKey: getApiKey(),
+      lessonId: state.lesson.id,
+      level: $("#level").value,
+      history: state.history,
     });
-    const data = await res.json();
     thinking.remove();
-    if (!res.ok) throw new Error(data.error);
     state.history.push({ role: "assistant", content: data.reply });
     if (state.history.length > 1) addFeedback(data);
     addTutorBubble(data);
     await speak(data.reply);
   } catch (err) {
+    console.error(err);
     thinking.remove();
-    addBubble("error", `Oups : ${err.message}. Vérifie que le serveur tourne et que la clé API est configurée.`);
+    // Retire le dernier message de l'apprenant pour qu'il puisse le redire.
+    if (state.history.at(-1)?.role === "user") state.history.pop();
+    addBubble("error", `Oups : ${explainError(err)}`);
   } finally {
     state.busy = false;
   }
@@ -233,34 +221,34 @@ async function tutorTurn() {
 
 async function sendUserText(text) {
   if (!text || state.busy) return;
+  if (!getApiKey()) return openSettings();
   addBubble("user", text);
-  state.history.push({ role: "user", content: text });
+  state.history.push({ role: "user", content: text.slice(0, 2000) });
   recordPractice();
-  await tutorTurn();
+  await tutorReply();
 }
+
+const IDLE_HINT = "Appuie sur le micro et parle en anglais";
 
 async function onMic() {
   if (state.busy) return;
-  const mic = $("#mic");
-  if (mic.classList.contains("recording")) {
-    listen.current?.stop();
-    return;
-  }
-  speechSynthesis?.cancel();
-  mic.classList.add("recording");
+  if (state.listening) return stopListening();
+  stopSpeaking();
+  state.listening = true;
+  $("#mic").classList.add("recording");
   $("#live").textContent = "Je t'écoute…";
   try {
     const text = await listen({ onInterim: (t) => ($("#live").textContent = t || "Je t'écoute…") });
-    $("#live").textContent = "Appuie sur le micro et parle en anglais";
+    $("#live").textContent = text ? IDLE_HINT : "Je n'ai rien entendu, réessaie.";
     if (text) await sendUserText(text);
-    else $("#live").textContent = "Je n'ai rien entendu, réessaie.";
   } catch (err) {
     $("#live").textContent =
       err.message === "not-allowed"
-        ? "Autorise l'accès au micro dans ton navigateur."
+        ? "Autorise le micro pour English Speak dans les réglages du téléphone."
         : "Micro indisponible : écris ta réponse au clavier.";
   } finally {
-    mic.classList.remove("recording");
+    state.listening = false;
+    $("#mic").classList.remove("recording");
   }
 }
 
@@ -271,19 +259,13 @@ function renderPhrases(phrases) {
   for (const phrase of phrases) {
     const li = document.createElement("li");
     li.className = "phrase";
-    li.innerHTML = `<p class="target"></p>
-      <div class="phrase-actions">
-        <button class="listen">🔊 Écouter</button>
-        <button class="repeat">🎤 Répéter</button>
-      </div>
-      <p class="result muted"></p>`;
+    li.innerHTML = `<p class="target"></p><div class="phrase-actions"></div><p class="result muted"></p>`;
     const target = li.querySelector(".target");
+    const result = li.querySelector(".result");
     target.textContent = phrase;
-    li.querySelector(".listen").onclick = () => speak(phrase, 0.85);
-    li.querySelector(".repeat").onclick = async (e) => {
-      const btn = e.currentTarget;
-      const result = li.querySelector(".result");
-      btn.disabled = true;
+    const repeat = button("🎤 Répéter", async () => {
+      repeat.disabled = true;
+      stopSpeaking();
       result.textContent = "Je t'écoute…";
       try {
         const spoken = await listen({ onInterim: (t) => (result.textContent = t) });
@@ -299,19 +281,21 @@ function renderPhrases(phrases) {
           score >= 90 ? "🎉 Excellent !" : score >= 60 ? "👍 Presque !" : "💪 Réessaie"
         }`;
         if (spoken) recordPractice();
-      } catch {
-        result.textContent = "Micro indisponible dans ce navigateur.";
+      } catch (err) {
+        result.textContent =
+          err.message === "not-allowed" ? "Autorise le micro dans les réglages du téléphone." : "Micro indisponible.";
       } finally {
-        btn.disabled = false;
+        repeat.disabled = false;
       }
-    };
+    });
+    li.querySelector(".phrase-actions").append(button("🔊 Écouter", () => speak(phrase, 0.85)), repeat);
     ul.appendChild(li);
   }
 }
 
 // ---------- Démarrage ----------
 $("#back").onclick = () => {
-  speechSynthesis?.cancel();
+  stopSpeaking();
   show("home");
 };
 $("#mic").onclick = onMic;
@@ -323,17 +307,11 @@ $("#text-form").onsubmit = (e) => {
   sendUserText(text);
 };
 document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => selectTab(t.dataset.tab)));
-try {
-  const saved = localStorage.getItem("level");
-  if (saved) $("#level").value = saved;
-} catch {}
-$("#level").onchange = (e) => {
-  try {
-    localStorage.setItem("level", e.target.value);
-  } catch {}
-};
-if (!SpeechRecognition) $("#support-warning").hidden = false;
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+$("#level").value = load("level", "intermediate");
+$("#level").onchange = (e) => save("level", e.target.value);
+$("#key-banner").onclick = openSettings;
 
+speechSupported().then((ok) => ($("#support-warning").hidden = ok));
 renderStreak();
-loadLessons();
+renderKeyBanner();
+renderLessons();

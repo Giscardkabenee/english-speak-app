@@ -131,3 +131,31 @@ button { font: inherit; cursor: pointer; }
 .phrase .target .miss { color: var(--miss); text-decoration: underline wavy; }
 .phrase-actions { display: flex; gap: 8px; }
 .phrase .result { margin: 8px 0 0; font-size: 0.9rem; }
+
+.hero-top { display: flex; justify-content: space-between; align-items: center; }
+.key-banner {
+  width: 100%; text-align: left; margin-bottom: 12px; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--accent); background: var(--surface); color: var(--accent); font-weight: 600;
+}
+.small { font-size: 0.85rem; }
+dialog {
+  border: none; border-radius: 16px; padding: 20px; width: min(92vw, 420px);
+  background: var(--surface); color: var(--text);
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+dialog h2 { margin: 0 0 12px; }
+dialog label { font-weight: 600; display: block; margin-bottom: 6px; }
+dialog input {
+  width: 100%; font: inherit; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+}
+.dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.dialog-actions button { padding: 8px 16px; border-radius: 10px; border: 1px solid var(--border); }
+.dialog-actions .primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.dialog-actions .secondary { background: var(--surface); color: var(--text); }
+/* Laisse de la place pour la barre d'état et la barre de navigation Android */
+.screen { padding-top: max(16px, env(safe-area-inset-top)); padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+/* L'écran de leçon tient dans l'écran : seule la conversation défile */
+#lesson.active { height: 100dvh; overflow: hidden; }
+.chat { min-height: 0; }
+#tab-pronounce { overflow-y: auto; }

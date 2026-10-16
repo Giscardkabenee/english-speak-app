@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getLesson, LEVELS } from "./lessons.js";
 
-export const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
+export const MODEL = "claude-opus-5-5";
 
 // The tutor answers with a fixed JSON shape so the app can show the reply,
 // the corrections and the French help separately.
@@ -54,12 +54,13 @@ Keep each reply short (1 to 3 sentences) so it is easy to listen to, stay in the
 Only list real grammar or vocabulary mistakes in "corrections"; explanations are in French and one sentence long.`;
 }
 
-const client = new Anthropic();
-
 /**
- * @param {{lessonId: string, level: string, history: {role: "user"|"assistant", content: string}[]}} params
+ * The app runs on the learner's own phone with their own API key, so it
+ * calls the Claude API directly (no server in between).
+ * @param {{apiKey: string, lessonId: string, level: string, history: {role: "user"|"assistant", content: string}[]}} params
  */
-export async function tutorTurn({ lessonId, level, history }) {
+export async function tutorTurn({ apiKey, lessonId, level, history }) {
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
   const lesson = getLesson(lessonId);
   const messages =
     history.length > 0

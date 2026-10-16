@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scorePronunciation, normalize } from "../public/scoring.js";
+import { scorePronunciation, normalize } from "../src/scoring.js";
 
 test("normalize removes punctuation and case", () => {
   assert.deepEqual(normalize("Could I have a LATTE, please?"), ["could", "i", "have", "a", "latte", "please"]);
