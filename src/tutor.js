@@ -1,7 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI } from "@google/genai";
 import { getLesson, LEVELS } from "./lessons.js";
 
-export const MODEL = "claude-opus-5-5";
+// Modèles Gemini avec offre gratuite, du plus généreux au moins généreux en
+// nombre de requêtes gratuites par jour. Si l'un est saturé, on essaie le suivant.
+export const MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash"];
 
 // The tutor answers with a fixed JSON shape so the app can show the reply,
 // the corrections and the French help separately.
@@ -27,7 +29,6 @@ const REPLY_SCHEMA = {
           explanation_fr: { type: "string", description: "Short explanation in French." },
         },
         required: ["original", "corrected", "explanation_fr"],
-        additionalProperties: false,
       },
     },
     better_way: {
@@ -40,7 +41,6 @@ const REPLY_SCHEMA = {
     },
   },
   required: ["reply", "reply_fr", "corrections", "better_way", "score"],
-  additionalProperties: false,
 };
 
 function systemPrompt(lesson, level) {
@@ -55,37 +55,46 @@ Only list real grammar or vocabulary mistakes in "corrections"; explanations are
 }
 
 /**
- * The app runs on the learner's own phone with their own API key, so it
- * calls the Claude API directly (no server in between).
+ * The app runs on the learner's own phone with their own free Gemini API key,
+ * so it calls the Gemini API directly (no server in between).
  * @param {{apiKey: string, lessonId: string, level: string, history: {role: "user"|"assistant", content: string}[]}} params
  */
 export async function tutorTurn({ apiKey, lessonId, level, history }) {
-  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  const ai = new GoogleGenAI({ apiKey });
   const lesson = getLesson(lessonId);
-  const messages =
-    history.length > 0
-      ? history
-      : [{ role: "user", content: "(The learner just opened the lesson. Greet them and start the role-play.)" }];
+  // The conversation always starts with this hidden learner turn, so Sam's
+  // greeting is answered from a "user" turn as Gemini expects.
+  const turns = [
+    { role: "user", content: "(The learner just opened the lesson. Greet them and start the role-play.)" },
+    ...history,
+  ];
+  const contents = turns.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
 
-  const response = await client.beta.messages.create({
-    model: MODEL,
-    max_tokens: 4000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    system: systemPrompt(lesson, level),
-    output_config: {
-      effort: "low",
-      format: { type: "json_schema", schema: REPLY_SCHEMA },
-    },
-    messages,
-  });
-
-  if (response.stop_reason === "refusal") {
-    throw new Error("Le tuteur n'a pas pu répondre à ce message.");
+  let lastError;
+  for (const model of MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          systemInstruction: systemPrompt(lesson, level),
+          responseMimeType: "application/json",
+          responseJsonSchema: REPLY_SCHEMA,
+          maxOutputTokens: 2000,
+        },
+      });
+      const text = response.text;
+      if (!text) throw new Error("Le tuteur n'a pas pu répondre à ce message.");
+      return JSON.parse(text);
+    } catch (err) {
+      lastError = err;
+      // Quota gratuit atteint (429) ou modèle indisponible (404) : on essaie le suivant.
+      if (err?.status === 429 || err?.status === 404) continue;
+      throw err;
+    }
   }
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-  return JSON.parse(text);
+  throw lastError;
 }

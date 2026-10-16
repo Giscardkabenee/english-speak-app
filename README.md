@@ -11,14 +11,15 @@ Une app **Android** pour apprendre l'anglais **en parlant**, inspirée de Speak.
 
 À chaque modification du code, GitHub construit automatiquement un nouvel APK (onglet **Actions**) et le publie dans les Releases. Pour mettre à jour, il suffit d'installer le nouvel APK par-dessus l'ancien : ta clé et ta progression sont conservées.
 
-## Premier lancement : ta clé API
+## Premier lancement : ta clé gratuite
 
-Sam utilise Claude, l'IA d'Anthropic. Il te faut une clé API :
+Sam utilise Gemini, l'IA de Google, qui propose une **offre gratuite** (sans carte bancaire) :
 
-1. Crée un compte sur [console.anthropic.com](https://console.anthropic.com/), ajoute un peu de crédit, puis crée une clé (elle commence par `sk-ant-`).
-2. Dans l'app, touche **⚙️** en haut à droite, colle la clé et touche **Enregistrer**.
+1. Va sur [aistudio.google.com](https://aistudio.google.com/) et connecte-toi avec ton compte Google.
+2. Touche **Get API key**, puis **Create API key**, et copie la clé (elle commence en général par `AIza`).
+3. Dans l'app, touche **⚙️** en haut à droite, colle la clé et touche **Enregistrer**.
 
-La clé reste enregistrée uniquement sur ton téléphone ; l'app envoie tes phrases directement à Anthropic, sans autre serveur. Les conversations sont facturées sur ton compte Anthropic. L'onglet **Prononciation** fonctionne sans clé.
+La clé reste enregistrée uniquement sur ton téléphone ; l'app envoie tes phrases directement à Google, sans autre serveur. L'offre gratuite limite le nombre de messages par minute et par jour : si la limite est atteinte, l'app essaie automatiquement un autre modèle Gemini gratuit, sinon elle te demande de réessayer plus tard. Avec l'offre gratuite, Google peut utiliser tes échanges pour améliorer ses produits. L'onglet **Prononciation** fonctionne sans clé.
 
 ## Fonctionnalités
 
@@ -50,7 +51,7 @@ Pour construire l'APK sur ton ordinateur, il faut Android Studio (ou le SDK Andr
 ```
 src/
   main.js          interface : leçons, conversation, prononciation, réglages
-  tutor.js         appel à Claude : consigne du tuteur et format de réponse (réponse, traduction, corrections, note)
+  tutor.js         appel à Gemini : consigne du tuteur et format de réponse (réponse, traduction, corrections, note)
   speech.js        micro et voix (plugins Android natifs, ou API du navigateur en version web)
   lessons.js       les leçons et les phrases de prononciation (facile d'en ajouter)
   scoring.js       comparaison mot à mot pour la prononciation

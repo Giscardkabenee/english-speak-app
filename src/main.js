@@ -7,7 +7,7 @@ const $ = (sel) => document.querySelector(sel);
 
 const state = {
   lesson: null,
-  history: [], // {role, content} envoyé à Claude
+  history: [], // {role, content} envoyé au tuteur IA
   busy: false,
   listening: false,
 };
@@ -38,10 +38,6 @@ function openSettings() {
 $("#settings-form").onsubmit = (e) => {
   e.preventDefault();
   const key = $("#api-key").value.trim();
-  if (key && !key.startsWith("sk-ant-")) {
-    $("#settings-status").textContent = "Une clé Anthropic commence par « sk-ant- ».";
-    return;
-  }
   save("apiKey", key);
   $("#settings").close();
   renderKeyBanner();
@@ -186,11 +182,13 @@ function addFeedback(data) {
 }
 
 function explainError(err) {
-  if (err?.status === 401) return "ta clé API n'est pas valide. Vérifie-la dans ⚙️ Réglages.";
-  if (err?.status === 429) return "trop de demandes d'un coup, attends quelques secondes et réessaie.";
-  if (err?.status === 400 && /credit/i.test(err.message)) return "ton compte Anthropic n'a plus de crédit.";
-  if (!navigator.onLine || err?.name === "APIConnectionError") return "pas de connexion Internet.";
-  return err?.message || "erreur inconnue.";
+  const msg = err?.message ?? "";
+  if (/API key not valid|API_KEY_INVALID/i.test(msg) || err?.status === 401)
+    return "ta clé Gemini n'est pas valide. Vérifie-la dans ⚙️ Réglages.";
+  if (err?.status === 429) return "la limite gratuite est atteinte pour le moment. Réessaie dans une minute, ou demain si c'est la limite du jour.";
+  if (err?.status === 403) return "Google refuse cette clé (pays non pris en charge ou API désactivée).";
+  if (!navigator.onLine || /fetch|network/i.test(msg)) return "pas de connexion Internet.";
+  return msg || "erreur inconnue.";
 }
 
 async function tutorReply() {
