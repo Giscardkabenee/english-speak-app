@@ -1,7 +1,7 @@
 import { scorePronunciation } from "./scoring.js";
-import { LESSONS, lessonOfTheDay } from "./lessons.js";
+import { LESSONS, WORK_LESSONS, lessonOfTheDay } from "./lessons.js";
 import { tutorReply, tutorFeedback } from "./tutor.js";
-import { speak, stopSpeaking, listen, stopListening, speechSupported } from "./speech.js";
+import { speak, stopSpeaking, listen, stopListening, speechSupported, englishVoices, setVoicePrefs } from "./speech.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -33,13 +33,40 @@ function save(key, value) {
 // ---------- Réglages : clé API ----------
 const getApiKey = () => load("apiKey", "");
 
+// Voix et vitesse choisies, appliquées dès le démarrage.
+setVoicePrefs({ voice: load("voice", ""), speed: load("speed", "1") });
+
+async function fillVoices() {
+  const select = $("#voice");
+  const voices = await englishVoices();
+  select.innerHTML = `<option value="">Voix par défaut</option>`;
+  for (const v of voices) {
+    const opt = document.createElement("option");
+    opt.value = v.id;
+    opt.textContent = v.label;
+    select.appendChild(opt);
+  }
+  select.value = voices.some((v) => v.id === load("voice", "")) ? load("voice", "") : "";
+}
+
 function openSettings() {
   $("#api-key").value = getApiKey();
+  $("#speed").value = load("speed", "1");
+  fillVoices();
   $("#settings").showModal();
 }
+$("#voice-test").onclick = () => {
+  // Essai avec les réglages affichés, sans les enregistrer.
+  const saved = { voice: load("voice", ""), speed: load("speed", "1") };
+  setVoicePrefs({ voice: $("#voice").value, speed: $("#speed").value });
+  speak("Hi, I'm Sam. Let's practise your English together.").finally(() => setVoicePrefs(saved));
+};
 $("#settings-form").onsubmit = (e) => {
   e.preventDefault();
   save("apiKey", $("#api-key").value.trim());
+  save("voice", $("#voice").value);
+  save("speed", $("#speed").value);
+  setVoicePrefs({ voice: $("#voice").value, speed: $("#speed").value });
   $("#settings").close();
   renderKeyBanner();
 };
@@ -103,17 +130,20 @@ function renderHome() {
   $("#featured-talk").onclick = () => openTalk(featured);
   $("#featured-pron").onclick = () => openPron(featured);
 
-  const list = $("#lessons");
-  list.innerHTML = "";
-  for (const lesson of LESSONS.filter((l) => l !== featured)) {
-    const row = document.createElement("button");
-    row.className = "lesson-row";
-    row.innerHTML = `<span></span><span></span>`;
-    row.children[0].textContent = lesson.title;
-    row.children[1].textContent = `${lesson.level} · ${lesson.minutes} min`;
-    row.onclick = () => openTalk(lesson);
-    list.appendChild(row);
-  }
+  const fill = (list, lessons) => {
+    list.innerHTML = "";
+    for (const lesson of lessons.filter((l) => l !== featured)) {
+      const row = document.createElement("button");
+      row.className = "lesson-row";
+      row.innerHTML = `<span></span><span></span>`;
+      row.children[0].textContent = lesson.title;
+      row.children[1].textContent = `${lesson.minutes} min`;
+      row.onclick = () => openTalk(lesson);
+      list.appendChild(row);
+    }
+  };
+  fill($("#work-lessons"), WORK_LESSONS);
+  fill($("#lessons"), LESSONS.filter((l) => !l.work));
   renderStats();
   renderKeyBanner();
 }
@@ -136,7 +166,9 @@ function openTalk(lesson) {
   state.lesson = lesson;
   state.history = [];
   state.samLine = "";
+  state.failed = null;
   state.hintIndex = 0;
+  $("#replay").textContent = "Réécouter";
   $("#talk-role").textContent = `Sam · ${lesson.role}`;
   $("#talk-lesson").textContent = lesson.title;
   $("#chat").innerHTML = "";
@@ -160,9 +192,12 @@ function explainError(err) {
   if (/API key not valid|API_KEY_INVALID/i.test(msg) || err?.status === 401)
     return "Ta clé Gemini n'est pas valide. Vérifie-la dans les réglages.";
   if (err?.status === 429) return "La limite gratuite est atteinte. Réessaie dans une minute, ou demain si c'est la limite du jour.";
+  if (err?.status === 503 || err?.status === 500 || /UNAVAILABLE|high demand|overloaded/i.test(msg))
+    return "Les serveurs gratuits de Google sont surchargés en ce moment. Touche « Réessayer » dans quelques secondes.";
   if (err?.status === 403) return "Google refuse cette clé (pays non pris en charge ou API désactivée).";
   if (!navigator.onLine || /fetch|network/i.test(msg)) return "Pas de connexion Internet.";
-  return msg || "Erreur inconnue.";
+  // Jamais de message technique brut (JSON) à l'écran.
+  return "Sam n'a pas pu répondre. Réessaie dans un instant.";
 }
 
 function showFeedback(data) {
@@ -201,6 +236,8 @@ async function samSpeaks(learnerText) {
   const apiKey = getApiKey();
   const level = $("#level").value;
   state.busy = true;
+  state.failed = null;
+  $("#replay").textContent = "Réécouter";
   $("#hint").hidden = true;
   setStage("thinking", "SAM RÉFLÉCHIT");
   $("#sam-line-fr").textContent = "";
@@ -234,8 +271,9 @@ async function samSpeaks(learnerText) {
   } catch (err) {
     console.error(err);
     if (!current()) return;
-    // Retire le dernier message de l'apprenant pour qu'il puisse le redire.
-    if (state.history.at(-1)?.role === "user") state.history.pop();
+    // Le bouton « Réessayer » renvoie la même phrase, sans avoir à la redire.
+    state.failed = { text: learnerText ?? "" };
+    $("#replay").textContent = "Réessayer";
     setStage("", "OUPS");
     $("#sam-line").textContent = explainError(err);
     addMsg("error", explainError(err));
@@ -247,6 +285,8 @@ async function samSpeaks(learnerText) {
 function sendLearnerText(text) {
   if (!text || state.busy) return;
   if (!getApiKey()) return openSettings();
+  // Après un échec, la phrase non répondue est remplacée par la nouvelle.
+  if (state.failed && state.history.at(-1)?.role === "user") state.history.pop();
   state.history.push({ role: "user", content: text.slice(0, 2000) });
   addMsg("user", text);
   recordPractice();
@@ -294,7 +334,10 @@ function showHint() {
 $("#talk-back").onclick = goHome;
 $("#mic").onclick = onMic;
 $("#hint-btn").onclick = showHint;
-$("#replay").onclick = () => state.samLine && speak(state.samLine, 0.85);
+$("#replay").onclick = () => {
+  if (state.failed && !state.busy) return samSpeaks(state.failed.text || undefined);
+  if (state.samLine) speak(state.samLine, 0.85);
+};
 $("#open-transcript").onclick = () => ($("#transcript").hidden = false);
 $("#close-transcript").onclick = () => ($("#transcript").hidden = true);
 $("#text-form").onsubmit = (e) => {

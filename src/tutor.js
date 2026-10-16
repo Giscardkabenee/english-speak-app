@@ -66,6 +66,7 @@ async function withModels(baseConfig, call) {
   const available = MODELS.filter((m) => (blockedUntil.get(m) ?? 0) < now);
   const queue = available.length ? [...available] : [...MODELS];
   let lastError;
+  let retried = false;
   while (queue.length) {
     const model = queue.shift();
     const config = { ...baseConfig };
@@ -80,9 +81,17 @@ async function withModels(baseConfig, call) {
         queue.unshift(model); // réessaie sans ce réglage
         continue;
       }
-      // Quota gratuit atteint (429) ou modèle indisponible (404) : on essaie le suivant.
-      if (err?.status === 429 || err?.status === 404) {
-        blockedUntil.set(model, Date.now() + (err.status === 429 ? 60_000 : 3_600_000));
+      // Quota gratuit atteint (429), modèle surchargé (503/500) ou indisponible (404) :
+      // on le met de côté un moment et on essaie le suivant.
+      const pause = { 429: 60_000, 404: 3_600_000, 503: 30_000, 500: 30_000 }[err?.status];
+      if (pause) {
+        blockedUntil.set(model, Date.now() + pause);
+        // Tous les modèles sont surchargés : on réessaie une fois après une courte pause.
+        if (!queue.length && (err.status === 503 || err.status === 500) && !retried) {
+          retried = true;
+          await new Promise((r) => setTimeout(r, 1500));
+          queue.push(...MODELS);
+        }
         continue;
       }
       throw err;

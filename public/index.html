@@ -40,7 +40,12 @@
         </div>
 
         <div class="next">
-          <h2>Ensuite</h2>
+          <h2>Mon travail : MEAL et conservation</h2>
+          <div id="work-lessons"></div>
+        </div>
+
+        <div class="next">
+          <h2>Vie quotidienne</h2>
           <div id="lessons"></div>
         </div>
 
@@ -163,6 +168,18 @@
       <label for="api-key">Clé API Gemini (gratuite)</label>
       <input id="api-key" type="password" placeholder="AIza..." autocomplete="off" spellcheck="false" />
       <p class="muted small">Crée ta clé gratuitement sur aistudio.google.com (bouton « Get API key »), sans carte bancaire. Elle reste enregistrée uniquement sur ce téléphone et sert à faire parler Sam.</p>
+      <label for="voice">Voix de Sam</label>
+      <div class="voice-row">
+        <select id="voice"><option value="">Voix par défaut</option></select>
+        <button type="button" id="voice-test" class="ghost-btn small">Écouter</button>
+      </div>
+      <label for="speed">Vitesse de la voix</label>
+      <select id="speed">
+        <option value="0.75">Lente</option>
+        <option value="0.9">Un peu lente</option>
+        <option value="1" selected>Normale</option>
+        <option value="1.15">Rapide</option>
+      </select>
       <div class="dialog-actions">
         <button type="button" id="settings-cancel" class="ghost-btn small">Annuler</button>
         <button type="submit" class="primary-btn small">Enregistrer</button>
