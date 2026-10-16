@@ -5,53 +5,53 @@ import { getLesson, LEVELS } from "./lessons.js";
 // nombre de requêtes gratuites par jour. Si l'un est saturé, on essaie le suivant.
 export const MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash"];
 
-// The tutor answers with a fixed JSON shape so the app can show the reply,
-// the corrections and the French help separately.
-const REPLY_SCHEMA = {
+// Sam's line and its translation come back as plain text separated by this
+// marker, so the English sentence can be spoken before the rest arrives.
+const SEPARATOR = "###";
+
+// Corrections are asked for separately, in parallel, so they never delay Sam.
+const FEEDBACK_SCHEMA = {
   type: "object",
   properties: {
-    reply: {
-      type: "string",
-      description: "The tutor's spoken answer in English, 1 to 3 short sentences, ending with a question that keeps the conversation going.",
-    },
-    reply_fr: {
-      type: "string",
-      description: "French translation of `reply`.",
-    },
     corrections: {
       type: "array",
-      description: "Mistakes in the learner's last message. Empty if there were none.",
+      description: "Real grammar or vocabulary mistakes in the learner's message. Empty if there were none.",
       items: {
         type: "object",
         properties: {
           original: { type: "string", description: "What the learner said." },
           corrected: { type: "string", description: "The natural, correct English." },
-          explanation_fr: { type: "string", description: "Short explanation in French." },
+          explanation_fr: { type: "string", description: "One short sentence in French." },
         },
         required: ["original", "corrected", "explanation_fr"],
       },
     },
     better_way: {
       type: "string",
-      description: "A more natural way a native speaker would say the learner's last message, or an empty string.",
+      description: "A more natural way a native speaker would say it, or an empty string if it was already natural.",
     },
-    score: {
-      type: "integer",
-      description: "0-100 rating of the learner's last message (grammar, vocabulary, fluency).",
+    praise_fr: {
+      type: "string",
+      description: "If there is no mistake: one short encouraging sentence in French. Otherwise an empty string.",
     },
+    score: { type: "integer", description: "0-100 rating of the message (grammar, vocabulary, fluency)." },
   },
-  required: ["reply", "reply_fr", "corrections", "better_way", "score"],
+  required: ["corrections", "better_way", "praise_fr", "score"],
 };
 
-function systemPrompt(lesson, level) {
-  return `You are "Sam", a warm, encouraging English speaking tutor in a mobile app for French-speaking learners. The conversation is spoken: the learner's messages come from speech recognition, so ignore missing punctuation and capital letters, and don't correct obvious transcription glitches.
+function replyPrompt(lesson, level) {
+  return `You are "Sam", a warm English speaking tutor in a mobile app for French-speaking learners. The conversation is spoken: the learner's messages come from speech recognition, so ignore missing punctuation and capital letters.
 
 Role-play: ${lesson.scenario}
-Lesson goal (for the learner): ${lesson.goal}
 Learner level: ${LEVELS[level] ?? LEVELS.intermediate}
 
-Keep each reply short (1 to 3 sentences) so it is easy to listen to, stay in the role-play, and always end with a question or prompt so the learner keeps speaking. If the learner writes in French, gently answer in English and help them say it in English in "better_way".
-Only list real grammar or vocabulary mistakes in "corrections"; explanations are in French and one sentence long.`;
+Answer with 1 or 2 short sentences in English that stay in the role-play and end with a question so the learner keeps speaking. If the learner speaks French, answer in English simply. Do not correct mistakes here.
+Output format, exactly: your English answer, then a line with only ${SEPARATOR}, then its French translation. Nothing else.`;
+}
+
+function feedbackPrompt(lesson, level) {
+  return `You check one spoken message from a French-speaking learner of English (level: ${LEVELS[level] ?? LEVELS.intermediate}) during this role-play: ${lesson.scenario}
+The text comes from speech recognition: ignore punctuation, capital letters and obvious transcription glitches. Only list real grammar or vocabulary mistakes.`;
 }
 
 // Un modèle qui a renvoyé « quota atteint » est mis de côté un moment, pour ne
@@ -60,74 +60,24 @@ const blockedUntil = new Map();
 // Certains modèles refusent le réglage de réflexion minimale : on s'en souvient.
 const noThinkingConfig = new Set();
 
-/** Extrait le champ "reply" dès qu'il est complet dans le JSON en cours d'arrivée. */
-export function extractReply(partialJson) {
-  const m = partialJson.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  if (!m) return null;
-  try {
-    return JSON.parse(`"${m[1]}"`);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The app runs on the learner's own phone with their own free Gemini API key,
- * so it calls the Gemini API directly (no server in between).
- * The answer is streamed: `onReply` is called with Sam's sentence as soon as it
- * has arrived, before the corrections and translation are finished.
- * @param {{apiKey: string, lessonId: string, level: string, history: {role: "user"|"assistant", content: string}[], onReply?: (reply: string) => void}} params
- */
-export async function tutorTurn({ apiKey, lessonId, level, history, onReply }) {
-  const ai = new GoogleGenAI({ apiKey });
-  const lesson = getLesson(lessonId);
-  // The conversation always starts with this hidden learner turn, so Sam's
-  // greeting is answered from a "user" turn as Gemini expects.
-  const turns = [
-    { role: "user", content: "(The learner just opened the lesson. Greet them and start the role-play.)" },
-    ...history,
-  ];
-  const contents = turns.map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: m.content }],
-  }));
-
+/** Runs `call(model, config)` on the first free model that answers. */
+async function withModels(baseConfig, call) {
   const now = Date.now();
   const available = MODELS.filter((m) => (blockedUntil.get(m) ?? 0) < now);
-  const candidates = available.length ? available : MODELS;
-
+  const queue = available.length ? [...available] : [...MODELS];
   let lastError;
-  for (const model of candidates) {
+  while (queue.length) {
+    const model = queue.shift();
+    const config = { ...baseConfig };
+    // Pas de « réflexion » avant de répondre : c'est une conversation, la vitesse compte.
+    if (!noThinkingConfig.has(model)) config.thinkingConfig = { thinkingLevel: "minimal" };
     try {
-      const config = {
-        systemInstruction: systemPrompt(lesson, level),
-        responseMimeType: "application/json",
-        responseJsonSchema: REPLY_SCHEMA,
-        maxOutputTokens: 1000,
-      };
-      // Pas de « réflexion » avant de répondre : c'est une conversation, la vitesse compte.
-      if (!noThinkingConfig.has(model)) config.thinkingConfig = { thinkingLevel: "minimal" };
-
-      const stream = await ai.models.generateContentStream({ model, contents, config });
-      let text = "";
-      let replySent = false;
-      for await (const chunk of stream) {
-        text += chunk.text ?? "";
-        if (!replySent && onReply) {
-          const reply = extractReply(text);
-          if (reply) {
-            replySent = true;
-            onReply(reply);
-          }
-        }
-      }
-      if (!text) throw new Error("Le tuteur n'a pas pu répondre à ce message.");
-      return JSON.parse(text);
+      return await call(model, config);
     } catch (err) {
       lastError = err;
-      if (err?.status === 400 && /thinking/i.test(err.message) && !noThinkingConfig.has(model)) {
+      if (err?.status === 400 && /thinking/i.test(err.message ?? "") && !noThinkingConfig.has(model)) {
         noThinkingConfig.add(model);
-        candidates.splice(candidates.indexOf(model) + 1, 0, model); // réessaie sans ce réglage
+        queue.unshift(model); // réessaie sans ce réglage
         continue;
       }
       // Quota gratuit atteint (429) ou modèle indisponible (404) : on essaie le suivant.
@@ -139,4 +89,68 @@ export async function tutorTurn({ apiKey, lessonId, level, history, onReply }) {
     }
   }
   throw lastError;
+}
+
+function toContents(history) {
+  // The conversation always starts with this hidden learner turn, so Sam's
+  // greeting is answered from a "user" turn as Gemini expects.
+  return [
+    { role: "user", content: "(The learner just opened the lesson. Greet them and start the role-play.)" },
+    ...history,
+  ].map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+}
+
+/** Splits "English ### French" (possibly still arriving) into its two parts. */
+export function splitReply(text) {
+  const i = text.indexOf(SEPARATOR);
+  if (i === -1) return { reply: text.trim(), reply_fr: "", complete: false };
+  return { reply: text.slice(0, i).trim(), reply_fr: text.slice(i + SEPARATOR.length).trim(), complete: true };
+}
+
+/**
+ * Sam's next line, streamed. `onReply` gets the English sentence as soon as it
+ * is complete, before the French translation has arrived.
+ * The app runs on the learner's phone with their own free Gemini key and calls
+ * the Gemini API directly (no server in between).
+ */
+export async function tutorReply({ apiKey, lessonId, level, history, onReply }) {
+  const ai = new GoogleGenAI({ apiKey });
+  const lesson = getLesson(lessonId);
+  const contents = toContents(history);
+  return withModels({ systemInstruction: replyPrompt(lesson, level), maxOutputTokens: 300 }, async (model, config) => {
+    const stream = await ai.models.generateContentStream({ model, contents, config });
+    let text = "";
+    let sent = false;
+    for await (const chunk of stream) {
+      text += chunk.text ?? "";
+      const parts = splitReply(text);
+      if (!sent && parts.complete && parts.reply) {
+        sent = true;
+        onReply?.(parts.reply);
+      }
+    }
+    const parts = splitReply(text);
+    if (!parts.reply) throw new Error("Sam n'a pas pu répondre à ce message.");
+    if (!sent) onReply?.(parts.reply);
+    return { reply: parts.reply, reply_fr: parts.reply_fr };
+  });
+}
+
+/** Corrections for the learner's last message (runs in parallel with tutorReply). */
+export async function tutorFeedback({ apiKey, lessonId, level, previousLine, learnerText }) {
+  const ai = new GoogleGenAI({ apiKey });
+  const lesson = getLesson(lessonId);
+  const prompt = `${previousLine ? `Sam said: "${previousLine}"\n` : ""}The learner answered: "${learnerText}"`;
+  return withModels(
+    {
+      systemInstruction: feedbackPrompt(lesson, level),
+      responseMimeType: "application/json",
+      responseJsonSchema: FEEDBACK_SCHEMA,
+      maxOutputTokens: 600,
+    },
+    async (model, config) => {
+      const res = await ai.models.generateContent({ model, contents: prompt, config });
+      return JSON.parse(res.text);
+    }
+  );
 }

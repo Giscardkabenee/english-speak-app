@@ -7,6 +7,15 @@ rmSync("www", { recursive: true, force: true });
 mkdirSync("www");
 cpSync("public", "www", { recursive: true });
 
+// Police Space Grotesk, embarquée dans l'app (fonctionne hors ligne).
+mkdirSync("www/fonts");
+for (const w of [400, 500, 600, 700]) {
+  cpSync(
+    `node_modules/@fontsource/space-grotesk/files/space-grotesk-latin-${w}-normal.woff2`,
+    `www/fonts/space-grotesk-${w}.woff2`
+  );
+}
+
 const options = {
   entryPoints: ["src/main.js"],
   bundle: true,
