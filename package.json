@@ -1,0 +1,19 @@
+{
+  "name": "english-speak-app",
+  "version": "0.1.0",
+  "description": "Apprendre l'anglais en parlant avec un tuteur IA (inspiré de Speak).",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "express": "^4.21.2"
+  }
+}

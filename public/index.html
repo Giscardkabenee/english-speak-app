@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#4f46e5" />
+  <title>English Speak</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main id="app">
+    <!-- Accueil -->
+    <section id="home" class="screen active">
+      <header class="hero">
+        <h1>English Speak</h1>
+        <p>Parle anglais avec Sam, ton tuteur IA. Choisis une leçon et appuie sur le micro.</p>
+      </header>
+
+      <div class="streak" id="streak"></div>
+
+      <label class="level">
+        Ton niveau
+        <select id="level">
+          <option value="beginner">Débutant (A1-A2)</option>
+          <option value="intermediate" selected>Intermédiaire (B1-B2)</option>
+          <option value="advanced">Avancé (C1)</option>
+        </select>
+      </label>
+
+      <ul id="lessons" class="lessons"></ul>
+
+      <p id="support-warning" class="warning" hidden>
+        La reconnaissance vocale n'est pas disponible dans ce navigateur. Utilise Chrome (Android, ordinateur) ou Safari (iPhone), ou écris tes réponses au clavier.
+      </p>
+    </section>
+
+    <!-- Leçon -->
+    <section id="lesson" class="screen">
+      <header class="topbar">
+        <button id="back" class="icon-btn" aria-label="Retour">←</button>
+        <div>
+          <h2 id="lesson-title"></h2>
+          <p id="lesson-goal" class="muted"></p>
+        </div>
+      </header>
+
+      <nav class="tabs">
+        <button class="tab active" data-tab="talk">Conversation</button>
+        <button class="tab" data-tab="pronounce">Prononciation</button>
+      </nav>
+
+      <div id="tab-talk" class="tab-panel active">
+        <div id="chat" class="chat" aria-live="polite"></div>
+        <form id="text-form" class="text-form">
+          <input id="text-input" type="text" placeholder="…ou écris ta réponse en anglais" autocomplete="off" />
+          <button type="submit" class="icon-btn" aria-label="Envoyer">➤</button>
+        </form>
+        <div class="mic-bar">
+          <p id="live" class="live muted">Appuie sur le micro et parle en anglais</p>
+          <button id="mic" class="mic" aria-label="Parler">🎤</button>
+        </div>
+      </div>
+
+      <div id="tab-pronounce" class="tab-panel">
+        <p class="muted">Écoute la phrase, puis répète-la. Les mots reconnus passent au vert.</p>
+        <ul id="phrases" class="phrases"></ul>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
